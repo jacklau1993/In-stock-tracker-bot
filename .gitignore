@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+
+# build artifacts
+*.log
+
+# CF previews
+wrangler-state.json
