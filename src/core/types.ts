@@ -20,6 +20,9 @@ export interface Track {
   title?: string | null;
   price?: string | null;
   variant_summary?: string | null;
+  variant_id?: string | null;
+  variant_label?: string | null;
+  variant_options?: string | null;
   status: Status;
   status_conf_count: number;
   fail_count: number;
@@ -40,6 +43,7 @@ export interface ScrapeSignals {
   schemaAvailability?: string;
   inStockFlag?: boolean;
   variantsAvailable?: string[];
+  variantOptions?: VariantOption[];
   title?: string;
   priceText?: string;
 }
@@ -50,6 +54,12 @@ export interface ScrapeResult {
   price?: string;
   title?: string;
   signals: ScrapeSignals;
+}
+
+export interface VariantOption {
+  id: string;
+  label: string;
+  available: boolean;
 }
 
 export interface EnvBindings {
@@ -100,6 +110,9 @@ export type TrackUpdatePatch = Partial<
     | 'title'
     | 'price'
     | 'variant_summary'
+    | 'variant_id'
+    | 'variant_label'
+    | 'variant_options'
     | 'last_checked_at'
     | 'next_check_at'
   >

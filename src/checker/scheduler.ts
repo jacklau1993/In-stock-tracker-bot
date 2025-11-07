@@ -5,7 +5,7 @@ import {
 } from '../core/config';
 import { D1Client } from '../db/d1';
 import { TrackRepository } from '../db/repos';
-import { EnvBindings, Track } from '../core/types';
+import { EnvBindings, Track, VariantOption } from '../core/types';
 import { RateLimiter } from './rateLimiter';
 import { fetchTrack } from './fetcher';
 import { parsePage } from './parser';
@@ -59,10 +59,12 @@ async function processTrack(track: DueTrack, repo: TrackRepository, env: EnvBind
     if (!outcome.html) throw new Error('Missing HTML in fetch');
     const parsed = parsePage(outcome.html, track.site_host, outcome.headers);
     const normalized = normalise(parsed);
+    const variantOptions = normalized.signals.variantOptions;
+    const { observedStatus, variantSummary } = resolveVariantStatus(track, normalized.signals.variantOptions, normalized.status);
     const needsManual = detectManualBlock(outcome.html);
     const decision = applyTransition({
       track,
-      observedStatus: normalized.status,
+      observedStatus,
       now,
       success: true,
       needsManual,
@@ -72,9 +74,10 @@ async function processTrack(track: DueTrack, repo: TrackRepository, env: EnvBind
       ...decision.patch,
       title: normalized.title ?? track.title,
       price: normalized.price ?? track.price,
-      variant_summary: normalized.variantsSummary ?? track.variant_summary,
+      variant_summary: variantSummary ?? normalized.variantsSummary ?? track.variant_summary,
       etag: outcome.headers.get('etag') ?? track.etag,
       content_sig: await hashContentSnippet(outcome.html),
+      variant_options: variantOptions ? JSON.stringify(variantOptions) : track.variant_options,
     };
 
     if (decision.alert) {
@@ -102,4 +105,21 @@ async function processTrack(track: DueTrack, repo: TrackRepository, env: EnvBind
 
 function detectManualBlock(html: string): boolean {
   return /captcha|enable javascript|region restriction/i.test(html);
+}
+
+function resolveVariantStatus(
+  track: Track,
+  options: VariantOption[] | undefined,
+  fallback: Track['status']
+): { observedStatus: Track['status']; variantSummary?: string | null } {
+  if (!track.variant_id) {
+    return { observedStatus: fallback, variantSummary: track.variant_summary ?? null };
+  }
+  const match = options?.find((opt) => opt.id === track.variant_id);
+  if (!match) {
+    return { observedStatus: fallback, variantSummary: track.variant_summary ?? null };
+  }
+  const status = match.available ? 'AVAILABLE' : 'NOT_AVAILABLE';
+  const summary = track.variant_label ? `${track.variant_label} (${match.available ? 'available' : 'out of stock'})` : track.variant_summary ?? null;
+  return { observedStatus: status, variantSummary: summary };
 }

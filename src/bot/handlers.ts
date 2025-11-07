@@ -1,14 +1,15 @@
 import { TrackRepository } from '../db/repos';
 import { MAX_ACTIVE_TRACKS_PER_USER } from '../core/config';
 import { normaliseUrl } from '../core/url';
-import { formatAlert, formatEndConfirmation, formatHelpMessage, formatList, formatRemoveConfirmation, formatStartMessage, formatTrackingAck } from './formatter';
+import { formatAlert, formatEndConfirmation, formatHelpMessage, formatList, formatRemoveConfirmation, formatStartMessage, formatTrackingAck, formatVariantPrompt } from './formatter';
 import { parseCommand } from './commands';
 import { ensureMessage } from './validation';
-import { Track, EnvBindings, TelegramUpdate } from '../core/types';
+import { Track, EnvBindings, TelegramUpdate, VariantOption } from '../core/types';
 import { logger } from '../core/logging';
 import { ValidationError } from '../core/errors';
 import { recordAudit } from '../telemetry/audit';
 import { recordMetric } from '../telemetry/metrics';
+import { previewProduct } from './preview';
 
 export interface HandlerDeps {
   repo: TrackRepository;
@@ -41,6 +42,9 @@ export class BotHandler {
           break;
         case 'remove':
           await this.handleRemove(chatId, userDbId, command.argument!);
+          break;
+        case 'variant':
+          await this.handleVariant(chatId, userDbId, command.argument!);
           break;
         case 'end':
           await this.handleEnd(chatId, userDbId);
@@ -85,13 +89,47 @@ export class BotHandler {
       return;
     }
 
-    const nowISO = new Date().toISOString();
-    await this.deps.repo.insertTrack(userDbId, cleanUrl, siteHost, urlHash, nowISO);
+    const preview = await previewProduct(cleanUrl).catch((err) => {
+      logger.warn('Preview fetch failed', { error: (err as Error).message });
+      return null;
+    });
+
+    const variantOptions = preview?.signals.variantOptions ?? [];
+    const requiresSelection = variantOptions.length > 1;
+    const autoSelect = variantOptions.length === 1 ? variantOptions[0] : null;
+    const variantOptionsJson = variantOptions.length ? JSON.stringify(variantOptions) : null;
+    const nextCheckAt = requiresSelection ? null : new Date().toISOString();
+
+    const trackId = await this.deps.repo.insertTrack(userDbId, cleanUrl, siteHost, urlHash, nextCheckAt, {
+      variantId: autoSelect?.id ?? null,
+      variantLabel: autoSelect?.label ?? null,
+      variantOptions: variantOptionsJson,
+    });
+
+    if (preview) {
+      await this.deps.repo.updateAfterCheck(trackId, {
+        title: preview.title ?? null,
+        price: preview.price ?? null,
+        variant_summary: autoSelect?.label ?? preview.variantsSummary ?? null,
+        variant_options: variantOptionsJson,
+      });
+    }
+
     recordAudit('track_added', { userId: userDbId, url: cleanUrl });
     recordMetric('track_added');
     const updated = await this.deps.repo.getActiveTracksByUser(userDbId);
-    const index = updated.findIndex((t) => t.url_hash === urlHash) + 1;
-    await sendTelegramMessage(this.deps.env, chatId, formatTrackingAck(index, siteHost), 'Markdown');
+    const index = updated.findIndex((t) => t.id === trackId) + 1;
+
+    if (requiresSelection) {
+      await sendTelegramMessage(
+        this.deps.env,
+        chatId,
+        formatVariantPrompt(index, siteHost, variantOptions),
+        'Markdown'
+      );
+    } else {
+      await sendTelegramMessage(this.deps.env, chatId, formatTrackingAck(index, siteHost), 'Markdown');
+    }
   }
 
   private async handleRemove(chatId: number, userDbId: number, arg: string) {
@@ -119,6 +157,81 @@ export class BotHandler {
     const removed = await this.deps.repo.deleteAllByUser(userDbId);
     recordAudit('track_end', { userId: userDbId, removed });
     await sendTelegramMessage(this.deps.env, chatId, formatEndConfirmation(removed));
+  }
+
+  private async handleVariant(chatId: number, userDbId: number, arg: string) {
+    const parts = arg.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) {
+      await sendTelegramMessage(this.deps.env, chatId, 'Usage: /variant <option#> or /variant <#> <option#>');
+      return;
+    }
+
+    const tracks = await this.deps.repo.getActiveTracksByUser(userDbId);
+    const pending = tracks.filter((t) => !t.variant_id && t.variant_options);
+
+    let trackIdx: number | undefined;
+    let optionIdx: number | undefined;
+
+    if (parts.length === 1) {
+      optionIdx = Number(parts[0]) - 1;
+      if (Number.isNaN(optionIdx)) {
+        await sendTelegramMessage(this.deps.env, chatId, 'Usage: /variant <option#>');
+        return;
+      }
+      if (pending.length === 0) {
+        await sendTelegramMessage(this.deps.env, chatId, 'No pending variant selections.');
+        return;
+      }
+      if (pending.length > 1) {
+        await sendTelegramMessage(this.deps.env, chatId, 'Specify the item as `/variant <#> <option#>` since multiple tracks need selection.');
+        return;
+      }
+      const target = pending[0];
+      trackIdx = tracks.findIndex((t) => t.id === target.id);
+    } else {
+      trackIdx = Number(parts[0]) - 1;
+      optionIdx = Number(parts[1]) - 1;
+      if (Number.isNaN(trackIdx) || Number.isNaN(optionIdx)) {
+        await sendTelegramMessage(this.deps.env, chatId, 'Usage: /variant <#> <option#>');
+        return;
+      }
+    }
+
+    const target = trackIdx !== undefined ? tracks[trackIdx] : undefined;
+    if (!target) {
+      await sendTelegramMessage(this.deps.env, chatId, 'Invalid track number.');
+      return;
+    }
+    if (!target.variant_options) {
+      await sendTelegramMessage(this.deps.env, chatId, 'This track has no selectable variants.');
+      return;
+    }
+
+    if (optionIdx === undefined) {
+      await sendTelegramMessage(this.deps.env, chatId, 'Invalid option number.');
+      return;
+    }
+
+    const options: VariantOption[] = JSON.parse(target.variant_options);
+    const option = options[optionIdx];
+    if (!option) {
+      await sendTelegramMessage(this.deps.env, chatId, 'Invalid variant option.');
+      return;
+    }
+
+    await this.deps.repo.updateAfterCheck(target.id, {
+      variant_id: option.id,
+      variant_label: option.label,
+      variant_summary: option.label,
+      next_check_at: new Date().toISOString(),
+    });
+
+    await sendTelegramMessage(
+      this.deps.env,
+      chatId,
+      `Tracking #${(trackIdx ?? tracks.findIndex((t) => t.id === target.id)) + 1}: now monitoring **${option.label}**`,
+      'Markdown'
+    );
   }
 }
 

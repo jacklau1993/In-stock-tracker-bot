@@ -18,12 +18,22 @@ export class TrackRepository {
     url: string,
     host: string,
     hash: string,
-    nowISO: string
+    nextCheckISO: string | null,
+    extras?: { variantId?: string | null; variantLabel?: string | null; variantOptions?: string | null }
   ): Promise<number> {
     const sql =
-      'INSERT INTO tracks (user_id, url, site_host, url_hash, status, status_conf_count, fail_count, backoff_sec, next_check_at) VALUES (?,?,?,?,"UNKNOWN",0,0,60,?) RETURNING id';
+      'INSERT INTO tracks (user_id, url, site_host, url_hash, status, status_conf_count, fail_count, backoff_sec, variant_id, variant_label, variant_options, next_check_at) VALUES (?,?,?,?,"UNKNOWN",0,0,60,?,?,?,?) RETURNING id';
     const stmt = this.client.prepare<{ id: number }>(sql);
-    const res = await stmt.first([userId, url, host, hash, nowISO]);
+    const res = await stmt.first([
+      userId,
+      url,
+      host,
+      hash,
+      extras?.variantId ?? null,
+      extras?.variantLabel ?? null,
+      extras?.variantOptions ?? null,
+      nextCheckISO,
+    ]);
     if (!res) throw new Error('Failed to insert track');
     return res.id;
   }
@@ -43,7 +53,7 @@ export class TrackRepository {
 
   async getDueTracks(nowISO: string, limit: number): Promise<(Track & { tg_user_id: string })[]> {
     const sql =
-      'SELECT tracks.*, users.tg_user_id FROM tracks JOIN users ON tracks.user_id = users.id WHERE (tracks.next_check_at IS NULL OR tracks.next_check_at <= ?) ORDER BY tracks.next_check_at IS NULL DESC, tracks.next_check_at ASC LIMIT ?';
+      'SELECT tracks.*, users.tg_user_id FROM tracks JOIN users ON tracks.user_id = users.id WHERE tracks.next_check_at IS NOT NULL AND tracks.next_check_at <= ? ORDER BY tracks.next_check_at ASC LIMIT ?';
     const stmt = this.client.prepare<Track & { tg_user_id: string }>(sql);
     const { results } = await stmt.all([nowISO, limit]);
     return results;

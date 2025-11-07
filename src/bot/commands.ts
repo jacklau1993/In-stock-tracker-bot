@@ -6,6 +6,7 @@ export type CommandType =
   | 'help'
   | 'list'
   | 'remove'
+  | 'variant'
   | 'end'
   | 'track-url'
   | 'unknown';
@@ -47,6 +48,9 @@ export async function parseCommand(text?: string): Promise<CommandResult> {
         return { type: 'remove', argument: String(idx) };
       }
       return { type: 'remove', argument: arg };
+    case '/variant':
+      if (rest.length === 0) throw new ValidationError('Usage: /variant <option#> or /variant <#> <option#>');
+      return { type: 'variant', argument: rest.join(' ') };
     case '/end':
       return { type: 'end' };
     default:

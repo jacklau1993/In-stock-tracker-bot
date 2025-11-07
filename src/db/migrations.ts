@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS tracks (
   title TEXT,
   price TEXT,
   variant_summary TEXT,
+  variant_id TEXT,
+  variant_label TEXT,
+  variant_options TEXT,
   status TEXT CHECK(status IN ('UNKNOWN','NOT_AVAILABLE','COMING_SOON','AVAILABLE','ERROR')) DEFAULT 'UNKNOWN',
   status_conf_count INTEGER DEFAULT 0,
   fail_count INTEGER DEFAULT 0,
@@ -38,5 +41,20 @@ export async function runMigrations(client: D1Client): Promise<void> {
   const statements = SCHEMA_SQL.split(';').map((s) => s.trim()).filter(Boolean);
   for (const stmt of statements) {
     await client.prepare(stmt).run();
+  }
+
+  const columns: Array<{ name: string; sql: string }> = [
+    { name: 'variant_id', sql: 'ALTER TABLE tracks ADD COLUMN variant_id TEXT' },
+    { name: 'variant_label', sql: 'ALTER TABLE tracks ADD COLUMN variant_label TEXT' },
+    { name: 'variant_options', sql: 'ALTER TABLE tracks ADD COLUMN variant_options TEXT' },
+  ];
+
+  for (const column of columns) {
+    const exists = await client
+      .prepare<{ name: string }>("SELECT name FROM pragma_table_info('tracks') WHERE name = ?")
+      .first([column.name]);
+    if (!exists) {
+      await client.prepare(column.sql).run();
+    }
   }
 }

@@ -1,7 +1,8 @@
-import { Status, ScrapeSignals } from '../core/types';
+import { Status, ScrapeSignals, VariantOption } from '../core/types';
 import { genericProfile } from './sites/generic';
 import { nikeProfile } from './sites/nike.com';
 import { amazonUkProfile } from './sites/amazon.co.uk';
+import { jellycatProfile } from './sites/jellycat.com';
 
 export interface ProfileResult {
   signals?: Partial<ScrapeSignals>;
@@ -9,6 +10,7 @@ export interface ProfileResult {
   variantsSummary?: string;
   price?: string;
   title?: string;
+  variantOptions?: VariantOption[];
 }
 
 export interface SiteProfile {
@@ -16,7 +18,7 @@ export interface SiteProfile {
   parse(html: string, headers: Headers): ProfileResult;
 }
 
-const profiles: SiteProfile[] = [nikeProfile, amazonUkProfile];
+const profiles: SiteProfile[] = [nikeProfile, amazonUkProfile, jellycatProfile];
 
 export function applyProfile(host: string, html: string, headers: Headers): ProfileResult {
   const profile = profiles.find((p) => p.hosts.some((h) => host.endsWith(h)));

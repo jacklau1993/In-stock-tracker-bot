@@ -62,7 +62,16 @@ export class MockD1Database implements D1Database {
     }
 
     if (query.startsWith('INSERT INTO tracks')) {
-      const [userId, url, host, hash, nextCheck] = params as [number, string, string, string, string];
+      const [userId, url, host, hash, variantId, variantLabel, variantOptions, nextCheck] = params as [
+        number,
+        string,
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+      ];
       const row: TrackRow = {
         id: this.trackSeq++,
         user_id: Number(userId),
@@ -80,6 +89,9 @@ export class MockD1Database implements D1Database {
         title: null,
         price: null,
         variant_summary: null,
+        variant_id: variantId,
+        variant_label: variantLabel,
+        variant_options: variantOptions,
         etag: null,
         content_sig: null,
       };
@@ -102,7 +114,7 @@ export class MockD1Database implements D1Database {
       const [nowISO, limit] = params as [string, number];
       const cutoff = new Date(nowISO).getTime();
       const rows = this.tracks
-        .filter((t) => !t.next_check_at || new Date(t.next_check_at).getTime() <= cutoff)
+        .filter((t) => t.next_check_at && new Date(t.next_check_at).getTime() <= cutoff)
         .sort((a, b) => {
           if (!a.next_check_at && !b.next_check_at) return 0;
           if (!a.next_check_at) return -1;

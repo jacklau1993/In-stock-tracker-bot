@@ -21,4 +21,18 @@ describe('parser', () => {
     const result = parsePage(html, 'example.com', headers);
     expect(result.status).toBe('COMING_SOON');
   });
+
+  it('uses jellycat profile to detect variant availability', () => {
+    const html = `
+      <script type="text/javascript">var BCData = {"product_attributes":{"available_variant_values":[2],"in_stock_attributes":[],"price":{"with_tax":{"formatted":"£60.00"}}}};</script>
+      <script type="text/javascript" id="swym-js-page-context">
+        var swymproduct = {
+          options: (true == true ? [{"id":1484,"values":[{"id":1,"label":"Large","selected":true,"data":"Large"},{"id":2,"label":"Huge","selected":false,"data":"Huge"}]}] : [])
+        };
+      </script>
+    `;
+    const result = parsePage(html, 'jellycat.com', headers);
+    expect(result.status).toBe('AVAILABLE');
+    expect(result.variantsSummary).toContain('Huge');
+  });
 });

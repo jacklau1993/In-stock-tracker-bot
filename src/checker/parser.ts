@@ -18,6 +18,7 @@ export function parsePage(html: string, host: string, headers: Headers): ScrapeR
     schemaAvailability: extractSchemaAvailability(html),
     inStockFlag: extractInStockFlag(html),
     variantsAvailable: extractVariants(html),
+    variantOptions: undefined,
     title: extractTitle(html),
     priceText: extractPrice(html),
   };
@@ -25,6 +26,9 @@ export function parsePage(html: string, host: string, headers: Headers): ScrapeR
   const profile = applyProfile(host, html, headers);
   if (profile.signals) {
     Object.assign(signals, profile.signals);
+  }
+  if (profile.variantOptions) {
+    signals.variantOptions = profile.variantOptions;
   }
 
   const variantsSummary = profile.variantsSummary ?? signals.variantsAvailable?.join(', ');

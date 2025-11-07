@@ -22,7 +22,13 @@ describe('TrackRepository', () => {
     const userId = await repo.upsertUser('123');
     const now = new Date('2024-01-01T00:00:00Z');
     await repo.insertTrack(userId, 'https://e.com/1', 'e.com', 'hash1', new Date(now.getTime() - 1000).toISOString());
-    await repo.insertTrack(userId, 'https://e.com/2', 'e.com', 'hash2', new Date(now.getTime() + 3600).toISOString());
+    await repo.insertTrack(
+      userId,
+      'https://e.com/2',
+      'e.com',
+      'hash2',
+      new Date(now.getTime() + 60 * 60 * 1000).toISOString()
+    );
     const due = await repo.getDueTracks(now.toISOString(), 10);
     expect(due).toHaveLength(1);
     expect(due[0].url).toContain('/1');
