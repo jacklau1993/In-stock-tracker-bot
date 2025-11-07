@@ -3,6 +3,7 @@ import { genericProfile } from './sites/generic';
 import { nikeProfile } from './sites/nike.com';
 import { amazonUkProfile } from './sites/amazon.co.uk';
 import { jellycatProfile } from './sites/jellycat.com';
+import { noodollProfile } from './sites/noodoll.com';
 
 export interface ProfileResult {
   signals?: Partial<ScrapeSignals>;
@@ -18,7 +19,7 @@ export interface SiteProfile {
   parse(html: string, headers: Headers): ProfileResult;
 }
 
-const profiles: SiteProfile[] = [nikeProfile, amazonUkProfile, jellycatProfile];
+const profiles: SiteProfile[] = [nikeProfile, amazonUkProfile, jellycatProfile, noodollProfile];
 
 export function applyProfile(host: string, html: string, headers: Headers): ProfileResult {
   const profile = profiles.find((p) => p.hosts.some((h) => host.endsWith(h)));

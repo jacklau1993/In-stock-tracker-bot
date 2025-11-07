@@ -6,7 +6,7 @@ A Cloudflare Workers + Telegram bot that watches up to three product URLs per us
 - Telegram commands: `/start`, `/help`, `/list`, `/remove <#|url>`, `/variant <option#>` (or `/variant <#> <option#>` when multiple pending), `/end`
 - Up to 3 active URLs per user with deduped hashes
 - Cron-driven checker with per-host rate limiting and anti-flicker confirmations
-- Lightweight HTML parsing + site profiles (generic + Nike + Amazon UK + Jellycat)
+- Lightweight HTML parsing + site profiles (generic + Nike + Amazon UK + Jellycat + Noodoll)
 - D1 persistence with enforced uniqueness and exponential backoff on errors
 
 ## Setup

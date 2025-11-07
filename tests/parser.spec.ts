@@ -35,4 +35,15 @@ describe('parser', () => {
     expect(result.status).toBe('AVAILABLE');
     expect(result.variantsSummary).toContain('Huge');
   });
+
+  it('uses noodoll profile to map availability', () => {
+    const html = `
+      <script type="text/x-magento-init">
+        {"*":{"Magento_Catalog/js/product/view/provider":{"data":{"items":{"1532":{"name":"Professor","is_salable":"0","price_info":{"formatted_prices":{"final_price":"£22.50"}}}}}}}}
+      </script>
+    `;
+    const result = parsePage(html, 'noodoll.com', headers);
+    expect(result.status).toBe('NOT_AVAILABLE');
+    expect(result.price).toBe('£22.50');
+  });
 });
