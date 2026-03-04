@@ -49,7 +49,7 @@ export async function parseCommand(text?: string): Promise<CommandResult> {
       }
       return { type: 'remove', argument: arg };
     case '/variant':
-      if (rest.length === 0) throw new ValidationError('Usage: /variant <option#> or /variant <#> <option#>');
+      if (rest.length === 0) return { type: 'variant' };
       return { type: 'variant', argument: rest.join(' ') };
     case '/end':
       return { type: 'end' };
