@@ -41,7 +41,7 @@ export async function parseCommand(text?: string): Promise<CommandResult> {
     case '/list':
       return { type: 'list' };
     case '/remove':
-      if (!arg) throw new ValidationError('Usage: /remove <#|url>');
+      if (!arg) return { type: 'remove' };
       if (arg.startsWith('#')) {
         const idx = Number(arg.slice(1));
         if (Number.isNaN(idx) || idx < 1) throw new ValidationError('Invalid list number');

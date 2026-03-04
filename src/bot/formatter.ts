@@ -3,7 +3,7 @@ import { Track, VariantOption } from '../core/types';
 export function formatStartMessage(): string {
   return [
     'Hello! Send me up to 3 product links (one per message) and I will check stock every minute.',
-    'Commands: /help, /list, /remove <#|url>, /end',
+    'Commands: /help, /list, /remove, /remove <#|url>, /end',
   ].join('\n');
 }
 
@@ -11,7 +11,7 @@ export function formatHelpMessage(): string {
   return [
     'Paste a product URL to start tracking.',
     'I will alert you once it is available (after double-confirming).',
-    'Use /list to see tracked items, /remove <#|url> to stop, /end to clear all.',
+    'Use /list to see tracked items, /remove (or /remove <#|url>) to stop, /end to clear all.',
   ].join('\n');
 }
 
@@ -48,6 +48,10 @@ export function formatList(tracks: Track[]): string {
 
 export function formatRemoveConfirmation(host: string): string {
   return `Removed tracking for **${host}**.`;
+}
+
+export function formatRemovePrompt(): string {
+  return 'Select an item to remove:';
 }
 
 export function formatEndConfirmation(count: number): string {
