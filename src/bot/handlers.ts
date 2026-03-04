@@ -32,7 +32,7 @@ export class BotHandler {
         userId = callback.userId;
         const tgId = String(userId);
         const userDbId = await this.deps.repo.upsertUser(tgId);
-        await this.handleRemoveCallback(userDbId, callback);
+        await this.handleCallbackAction(userDbId, callback);
         return new Response('ok', { status: 200 });
       }
 
@@ -54,7 +54,7 @@ export class BotHandler {
           await this.handleRemove(chatId, userDbId, command.argument);
           break;
         case 'variant':
-          await this.handleVariant(chatId, userDbId, command.argument!);
+          await this.handleVariant(chatId, userDbId, command.argument);
           break;
         case 'end':
           await this.handleEnd(chatId, userDbId);
@@ -78,6 +78,33 @@ export class BotHandler {
       logger.error('Bot handler error', { error: (err as Error).message });
       return new Response('error', { status: 500 });
     }
+  }
+
+  private async handleCallbackAction(
+    userDbId: number,
+    callback: {
+      callbackQueryId: string;
+      chatId: number;
+      data: string;
+      messageId: number;
+    }
+  ) {
+    if (callback.data.startsWith('remove:')) {
+      await this.handleRemoveCallback(userDbId, callback);
+      return;
+    }
+
+    if (callback.data.startsWith('variant-track:')) {
+      await this.handleVariantTrackCallback(userDbId, callback);
+      return;
+    }
+
+    if (callback.data.startsWith('variant-pick:')) {
+      await this.handleVariantPickCallback(userDbId, callback);
+      return;
+    }
+
+    await answerTelegramCallbackQuery(this.deps.env, callback.callbackQueryId, 'Unknown action');
   }
 
   private async handleRemoveCallback(
@@ -109,6 +136,92 @@ export class BotHandler {
       await sendTelegramMessage(this.deps.env, callback.chatId, formatRemoveConfirmation(target.site_host), 'Markdown');
     }
 
+    await clearTelegramInlineKeyboard(this.deps.env, callback.chatId, callback.messageId).catch((err) => {
+      logger.warn('Failed to clear inline keyboard', { error: (err as Error).message });
+    });
+  }
+
+  private async handleVariantTrackCallback(
+    userDbId: number,
+    callback: {
+      callbackQueryId: string;
+      chatId: number;
+      data: string;
+      messageId: number;
+    }
+  ) {
+    const match = /^variant-track:(\d+)$/.exec(callback.data);
+    if (!match) {
+      await answerTelegramCallbackQuery(this.deps.env, callback.callbackQueryId, 'Unknown action');
+      return;
+    }
+
+    const trackId = Number(match[1]);
+    const tracks = await this.deps.repo.getActiveTracksByUser(userDbId);
+    const trackIdx = tracks.findIndex((t) => t.id === trackId);
+    const target = trackIdx >= 0 ? tracks[trackIdx] : undefined;
+    if (!target) {
+      await answerTelegramCallbackQuery(this.deps.env, callback.callbackQueryId, 'Track not found');
+      await sendTelegramMessage(this.deps.env, callback.chatId, 'Could not find that tracked URL.');
+      return;
+    }
+
+    const options = this.getVariantOptions(target);
+    if (options.length === 0) {
+      await answerTelegramCallbackQuery(this.deps.env, callback.callbackQueryId, 'No variants');
+      await sendTelegramMessage(this.deps.env, callback.chatId, 'This track has no selectable variants.');
+      return;
+    }
+
+    await answerTelegramCallbackQuery(this.deps.env, callback.callbackQueryId, 'Pick a variant');
+    await sendTelegramMessage(
+      this.deps.env,
+      callback.chatId,
+      this.formatVariantPickerMessage(trackIdx + 1, target.site_host),
+      'Markdown',
+      buildVariantOptionKeyboard(target.id, options)
+    );
+    await clearTelegramInlineKeyboard(this.deps.env, callback.chatId, callback.messageId).catch((err) => {
+      logger.warn('Failed to clear inline keyboard', { error: (err as Error).message });
+    });
+  }
+
+  private async handleVariantPickCallback(
+    userDbId: number,
+    callback: {
+      callbackQueryId: string;
+      chatId: number;
+      data: string;
+      messageId: number;
+    }
+  ) {
+    const match = /^variant-pick:(\d+):(\d+)$/.exec(callback.data);
+    if (!match) {
+      await answerTelegramCallbackQuery(this.deps.env, callback.callbackQueryId, 'Unknown action');
+      return;
+    }
+
+    const trackId = Number(match[1]);
+    const optionIdx = Number(match[2]);
+    const tracks = await this.deps.repo.getActiveTracksByUser(userDbId);
+    const trackIdx = tracks.findIndex((t) => t.id === trackId);
+    const target = trackIdx >= 0 ? tracks[trackIdx] : undefined;
+    if (!target) {
+      await answerTelegramCallbackQuery(this.deps.env, callback.callbackQueryId, 'Track not found');
+      await sendTelegramMessage(this.deps.env, callback.chatId, 'Could not find that tracked URL.');
+      return;
+    }
+
+    const options = this.getVariantOptions(target);
+    const option = options[optionIdx];
+    if (!option) {
+      await answerTelegramCallbackQuery(this.deps.env, callback.callbackQueryId, 'Invalid option');
+      await sendTelegramMessage(this.deps.env, callback.chatId, 'Invalid variant option.');
+      return;
+    }
+
+    await this.selectVariant(callback.chatId, target, trackIdx, option);
+    await answerTelegramCallbackQuery(this.deps.env, callback.callbackQueryId, 'Variant selected');
     await clearTelegramInlineKeyboard(this.deps.env, callback.chatId, callback.messageId).catch((err) => {
       logger.warn('Failed to clear inline keyboard', { error: (err as Error).message });
     });
@@ -169,7 +282,8 @@ export class BotHandler {
         this.deps.env,
         chatId,
         formatVariantPrompt(index, siteHost, variantOptions),
-        'Markdown'
+        'Markdown',
+        buildVariantOptionKeyboard(trackId, variantOptions)
       );
     } else {
       await sendTelegramMessage(this.deps.env, chatId, formatTrackingAck(index, siteHost), 'Markdown');
@@ -219,15 +333,21 @@ export class BotHandler {
     await sendTelegramMessage(this.deps.env, chatId, formatEndConfirmation(removed));
   }
 
-  private async handleVariant(chatId: number, userDbId: number, arg: string) {
-    const parts = arg.trim().split(/\s+/).filter(Boolean);
-    if (parts.length === 0) {
-      await sendTelegramMessage(this.deps.env, chatId, 'Usage: /variant <option#> or /variant <#> <option#>');
+  private async handleVariant(chatId: number, userDbId: number, arg?: string) {
+    const tracks = await this.deps.repo.getActiveTracksByUser(userDbId);
+
+    if (!arg) {
+      await this.sendVariantPicker(chatId, tracks);
       return;
     }
 
-    const tracks = await this.deps.repo.getActiveTracksByUser(userDbId);
-    const pending = tracks.filter((t) => !t.variant_id && t.variant_options);
+    const parts = arg.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) {
+      await this.sendVariantPicker(chatId, tracks);
+      return;
+    }
+
+    const pending = tracks.filter((t) => !t.variant_id && this.getVariantOptions(t).length > 0);
 
     let trackIdx: number | undefined;
     let optionIdx: number | undefined;
@@ -243,7 +363,11 @@ export class BotHandler {
         return;
       }
       if (pending.length > 1) {
-        await sendTelegramMessage(this.deps.env, chatId, 'Specify the item as `/variant <#> <option#>` since multiple tracks need selection.');
+        await sendTelegramMessage(
+          this.deps.env,
+          chatId,
+          'Specify the item as `/variant <#> <option#>` since multiple tracks need selection.'
+        );
         return;
       }
       const target = pending[0];
@@ -262,24 +386,78 @@ export class BotHandler {
       await sendTelegramMessage(this.deps.env, chatId, 'Invalid track number.');
       return;
     }
-    if (!target.variant_options) {
+
+    const options = this.getVariantOptions(target);
+    if (options.length === 0) {
       await sendTelegramMessage(this.deps.env, chatId, 'This track has no selectable variants.');
       return;
     }
-
     if (optionIdx === undefined) {
       await sendTelegramMessage(this.deps.env, chatId, 'Invalid option number.');
       return;
     }
 
-    const options: VariantOption[] = JSON.parse(target.variant_options);
     const option = options[optionIdx];
     if (!option) {
       await sendTelegramMessage(this.deps.env, chatId, 'Invalid variant option.');
       return;
     }
 
-    await this.deps.repo.updateAfterCheck(target.id, {
+    await this.selectVariant(chatId, target, trackIdx, option);
+  }
+
+  private async sendVariantPicker(chatId: number, tracks: Track[]) {
+    const variantTracks = tracks.filter((track) => this.getVariantOptions(track).length > 0);
+    if (variantTracks.length === 0) {
+      await sendTelegramMessage(this.deps.env, chatId, 'No tracks with selectable variants.');
+      return;
+    }
+
+    if (variantTracks.length === 1) {
+      const track = variantTracks[0];
+      const trackIdx = tracks.findIndex((t) => t.id === track.id);
+      await sendTelegramMessage(
+        this.deps.env,
+        chatId,
+        this.formatVariantPickerMessage(trackIdx + 1, track.site_host),
+        'Markdown',
+        buildVariantOptionKeyboard(track.id, this.getVariantOptions(track))
+      );
+      return;
+    }
+
+    await sendTelegramMessage(
+      this.deps.env,
+      chatId,
+      'Choose a tracked URL first, then pick a variant:',
+      undefined,
+      buildVariantTrackKeyboard(tracks, variantTracks)
+    );
+  }
+
+  private getVariantOptions(track: Track): VariantOption[] {
+    if (!track.variant_options) return [];
+    try {
+      const parsed = JSON.parse(track.variant_options) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((item): item is VariantOption => {
+          if (!item || typeof item !== 'object') return false;
+          const option = item as Partial<VariantOption>;
+          return typeof option.id === 'string' && typeof option.label === 'string' && typeof option.available === 'boolean';
+        })
+        .map((option) => ({ id: option.id, label: option.label, available: option.available }));
+    } catch {
+      return [];
+    }
+  }
+
+  private formatVariantPickerMessage(order: number, host: string): string {
+    return `Tracking #${order}: **${host}** has multiple options.\nPick a variant:`;
+  }
+
+  private async selectVariant(chatId: number, track: Track, trackIdx: number, option: VariantOption) {
+    await this.deps.repo.updateAfterCheck(track.id, {
       variant_id: option.id,
       variant_label: option.label,
       variant_summary: option.label,
@@ -289,7 +467,7 @@ export class BotHandler {
     await sendTelegramMessage(
       this.deps.env,
       chatId,
-      `Tracking #${(trackIdx ?? tracks.findIndex((t) => t.id === target.id)) + 1}: now monitoring **${option.label}**`,
+      `Tracking #${trackIdx + 1}: now monitoring **${option.label}**`,
       'Markdown'
     );
   }
@@ -315,10 +493,41 @@ function buildRemoveKeyboard(tracks: Track[]): TelegramReplyMarkup {
   };
 }
 
+function buildVariantTrackKeyboard(allTracks: Track[], variantTracks: Track[]): TelegramReplyMarkup {
+  return {
+    inline_keyboard: variantTracks.map((track) => {
+      const order = allTracks.findIndex((t) => t.id === track.id) + 1;
+      return [
+        {
+          text: formatVariantTrackButtonLabel(track, order),
+          callback_data: `variant-track:${track.id}`,
+        },
+      ];
+    }),
+  };
+}
+
+function buildVariantOptionKeyboard(trackId: number, options: VariantOption[]): TelegramReplyMarkup {
+  return {
+    inline_keyboard: options.map((option, idx) => [
+      {
+        text: `Option ${idx + 1}: ${option.label} (${option.available ? 'Available' : 'Not available'})`,
+        callback_data: `variant-pick:${trackId}:${idx}`,
+      },
+    ]),
+  };
+}
+
 function formatRemoveButtonLabel(track: Track, order: number): string {
   const suffix = track.variant_label ? ` [${track.variant_label}]` : '';
   const raw = `#${order} ${track.site_host}${suffix}`;
   return raw.length <= 50 ? raw : `${raw.slice(0, 47)}...`;
+}
+
+function formatVariantTrackButtonLabel(track: Track, order: number): string {
+  const suffix = track.variant_label ? ` [${track.variant_label}]` : '';
+  const raw = `#${order} ${track.site_host}${suffix}`;
+  return raw.length <= 60 ? raw : `${raw.slice(0, 57)}...`;
 }
 
 export async function sendTelegramMessage(
