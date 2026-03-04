@@ -1,9 +1,9 @@
 import { TrackRepository } from '../db/repos';
 import { MAX_ACTIVE_TRACKS_PER_USER } from '../core/config';
 import { normaliseUrl } from '../core/url';
-import { formatAlert, formatEndConfirmation, formatHelpMessage, formatList, formatRemoveConfirmation, formatStartMessage, formatTrackingAck, formatVariantPrompt } from './formatter';
+import { formatEndConfirmation, formatHelpMessage, formatList, formatRemoveConfirmation, formatRemovePrompt, formatStartMessage, formatTrackingAck, formatVariantPrompt } from './formatter';
 import { parseCommand } from './commands';
-import { ensureMessage } from './validation';
+import { ensureCallbackQuery, ensureMessage } from './validation';
 import { Track, EnvBindings, TelegramUpdate, VariantOption } from '../core/types';
 import { logger } from '../core/logging';
 import { ValidationError } from '../core/errors';
@@ -26,6 +26,16 @@ export class BotHandler {
     let command;
 
     try {
+      if (update.callback_query) {
+        const callback = ensureCallbackQuery(update);
+        chatId = callback.chatId;
+        userId = callback.userId;
+        const tgId = String(userId);
+        const userDbId = await this.deps.repo.upsertUser(tgId);
+        await this.handleRemoveCallback(userDbId, callback);
+        return new Response('ok', { status: 200 });
+      }
+
       ({ chatId, userId, text } = ensureMessage(update));
       command = await parseCommand(text);
       const tgId = String(userId);
@@ -41,7 +51,7 @@ export class BotHandler {
           await this.sendList(chatId, userDbId);
           break;
         case 'remove':
-          await this.handleRemove(chatId, userDbId, command.argument!);
+          await this.handleRemove(chatId, userDbId, command.argument);
           break;
         case 'variant':
           await this.handleVariant(chatId, userDbId, command.argument!);
@@ -68,6 +78,40 @@ export class BotHandler {
       logger.error('Bot handler error', { error: (err as Error).message });
       return new Response('error', { status: 500 });
     }
+  }
+
+  private async handleRemoveCallback(
+    userDbId: number,
+    callback: {
+      callbackQueryId: string;
+      chatId: number;
+      data: string;
+      messageId: number;
+    }
+  ) {
+    const match = /^remove:(\d+)$/.exec(callback.data);
+    if (!match) {
+      await answerTelegramCallbackQuery(this.deps.env, callback.callbackQueryId, 'Unknown action');
+      return;
+    }
+
+    const trackId = Number(match[1]);
+    const tracks = await this.deps.repo.getActiveTracksByUser(userDbId);
+    const target = tracks.find((t) => t.id === trackId);
+
+    if (!target) {
+      await answerTelegramCallbackQuery(this.deps.env, callback.callbackQueryId, 'Already removed');
+      await sendTelegramMessage(this.deps.env, callback.chatId, 'Could not find that tracked URL.');
+    } else {
+      await this.deps.repo.deleteTrack(target.id);
+      recordAudit('track_removed', { userId: userDbId, trackId: target.id });
+      await answerTelegramCallbackQuery(this.deps.env, callback.callbackQueryId, 'Removed');
+      await sendTelegramMessage(this.deps.env, callback.chatId, formatRemoveConfirmation(target.site_host), 'Markdown');
+    }
+
+    await clearTelegramInlineKeyboard(this.deps.env, callback.chatId, callback.messageId).catch((err) => {
+      logger.warn('Failed to clear inline keyboard', { error: (err as Error).message });
+    });
   }
 
   private async sendList(chatId: number, userDbId: number) {
@@ -132,8 +176,24 @@ export class BotHandler {
     }
   }
 
-  private async handleRemove(chatId: number, userDbId: number, arg: string) {
+  private async handleRemove(chatId: number, userDbId: number, arg?: string) {
     const tracks = await this.deps.repo.getActiveTracksByUser(userDbId);
+
+    if (!arg) {
+      if (tracks.length === 0) {
+        await sendTelegramMessage(this.deps.env, chatId, 'You have no active tracks. Send me a product URL to begin.');
+        return;
+      }
+      await sendTelegramMessage(
+        this.deps.env,
+        chatId,
+        formatRemovePrompt(),
+        undefined,
+        buildRemoveKeyboard(tracks)
+      );
+      return;
+    }
+
     let target: Track | undefined;
     if (/^\d+$/.test(arg)) {
       const idx = Number(arg) - 1;
@@ -235,22 +295,95 @@ export class BotHandler {
   }
 }
 
+interface TelegramInlineKeyboardButton {
+  text: string;
+  callback_data: string;
+}
+
+interface TelegramReplyMarkup {
+  inline_keyboard: TelegramInlineKeyboardButton[][];
+}
+
+function buildRemoveKeyboard(tracks: Track[]): TelegramReplyMarkup {
+  return {
+    inline_keyboard: tracks.map((track, idx) => [
+      {
+        text: formatRemoveButtonLabel(track, idx + 1),
+        callback_data: `remove:${track.id}`,
+      },
+    ]),
+  };
+}
+
+function formatRemoveButtonLabel(track: Track, order: number): string {
+  const suffix = track.variant_label ? ` [${track.variant_label}]` : '';
+  const raw = `#${order} ${track.site_host}${suffix}`;
+  return raw.length <= 50 ? raw : `${raw.slice(0, 47)}...`;
+}
+
 export async function sendTelegramMessage(
   env: EnvBindings,
   chatId: number,
   text: string,
-  parseMode?: 'MarkdownV2' | 'Markdown' | 'HTML'
+  parseMode?: 'MarkdownV2' | 'Markdown' | 'HTML',
+  replyMarkup?: TelegramReplyMarkup
 ) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: parseMode }),
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      parse_mode: parseMode,
+      reply_markup: replyMarkup,
+    }),
   });
   if (!res.ok) {
     const body = await res.text();
     logger.error('Telegram send failed', { status: res.status, body });
     throw new Error('Failed to send Telegram message');
+  }
+}
+
+async function answerTelegramCallbackQuery(
+  env: EnvBindings,
+  callbackQueryId: string,
+  text?: string
+) {
+  const token = env.TELEGRAM_BOT_TOKEN;
+  const url = `https://api.telegram.org/bot${token}/answerCallbackQuery`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      callback_query_id: callbackQueryId,
+      text,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    logger.error('Telegram callback answer failed', { status: res.status, body });
+    throw new Error('Failed to answer callback query');
+  }
+}
+
+async function clearTelegramInlineKeyboard(env: EnvBindings, chatId: number, messageId: number) {
+  const token = env.TELEGRAM_BOT_TOKEN;
+  const url = `https://api.telegram.org/bot${token}/editMessageReplyMarkup`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: { inline_keyboard: [] },
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    logger.warn('Failed to clear reply markup', { status: res.status, body });
+    throw new Error('Failed to clear inline keyboard');
   }
 }

@@ -95,6 +95,23 @@ export interface TelegramUpdate {
       type: string;
     }>;
   };
+  callback_query?: {
+    id: string;
+    from?: {
+      id: number;
+      is_bot?: boolean;
+      first_name?: string;
+      username?: string;
+    };
+    data?: string;
+    message?: {
+      message_id: number;
+      chat?: {
+        id: number;
+        type: string;
+      };
+    };
+  };
 }
 
 export type TrackUpdatePatch = Partial<
