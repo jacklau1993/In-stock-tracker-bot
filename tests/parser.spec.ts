@@ -46,4 +46,49 @@ describe('parser', () => {
     expect(result.status).toBe('NOT_AVAILABLE');
     expect(result.price).toBe('£22.50');
   });
+
+  it('uses greenpheasant profile to prioritize in-stock class over noisy text', () => {
+    const html = `
+      <p class="stock in-stock">In stock</p>
+      <div>Out of stock in other colours</div>
+    `;
+    const result = parsePage(html, 'greenpheasantgifts.co.uk', headers);
+    expect(result.status).toBe('AVAILABLE');
+  });
+
+  it('uses greenpheasant profile to map out-of-stock class', () => {
+    const html = `
+      <p class="stock out-of-stock">Out of stock</p>
+      <button>Add to basket</button>
+    `;
+    const result = parsePage(html, 'greenpheasantgifts.co.uk', headers);
+    expect(result.status).toBe('NOT_AVAILABLE');
+  });
+
+  it('uses greenpheasant schema availability fallback and extracts title/price', () => {
+    const html = `
+      <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Green Pheasant Test Product",
+          "offers": {
+            "@type": "Offer",
+            "availability": "https://schema.org/InStock",
+            "price": "29.99"
+          }
+        }
+      </script>
+    `;
+    const result = parsePage(html, 'greenpheasantgifts.co.uk', headers);
+    expect(result.status).toBe('AVAILABLE');
+    expect(result.title).toBe('Green Pheasant Test Product');
+    expect(result.price).toBe('29.99');
+  });
+
+  it('does not apply greenpheasant class-based parsing on other hosts', () => {
+    const html = '<p class="stock in-stock">In stock</p>';
+    const result = parsePage(html, 'example.com', headers);
+    expect(result.status).toBe('UNKNOWN');
+  });
 });
