@@ -15,6 +15,7 @@ export async function fetchTrack(track: Track, env: EnvBindings): Promise<FetchO
   try {
     const headers = new Headers({
       'User-Agent': USER_AGENT,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': ACCEPT_LANGUAGE,
     });
     if (track.etag) headers.set('If-None-Match', track.etag);
