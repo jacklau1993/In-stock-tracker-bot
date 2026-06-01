@@ -14,5 +14,5 @@ export const PER_HOST_MIN_GAP_MS = 1000;
 export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 
 export const USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36';
 export const ACCEPT_LANGUAGE = 'en-GB,en;q=0.9';
